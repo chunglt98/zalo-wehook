@@ -65,10 +65,6 @@ export default async function handler(req, res) {
         #last-refresh {
           text-align:center; color:#888; font-size:13px; margin-top:20px;
         }
-        #loading {
-          text-align:center; color:#0078ff; font-size:14px;
-          display:none; margin-bottom:15px;
-        }
       </style>
     </head>
     <body>
@@ -78,32 +74,11 @@ export default async function handler(req, res) {
         <div class="stat-card"><span>${totalEvents}</span>Total Events</div>
       </div>
 
-      <div id="loading">⏳ Đang tải dữ liệu mới...</div>
-
-      <div class="endpoint-list" id="endpoint-list">
+      <div class="endpoint-list">
         ${renderEndpoints(stats)}
       </div>
 
       <div id="last-refresh">Cập nhật lần cuối: ${formatVNTime(new Date())}</div>
-
-      <script>
-        async function refreshData() {
-          const loading = document.getElementById('loading');
-          loading.style.display = 'block';
-          try {
-            const res = await fetch('/api/dashboard-data');
-            const html = await res.text();
-            document.getElementById('endpoint-list').innerHTML = html;
-            document.getElementById('last-refresh').innerText =
-              'Cập nhật lần cuối: ' + new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-          } catch (err) {
-            console.error(err);
-          } finally {
-            loading.style.display = 'none';
-          }
-        }
-        setInterval(refreshData, 3000); // 🔁 refresh mỗi 3s
-      </script>
     </body>
     </html>`;
 
