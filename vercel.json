@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/webhook", "destination": "/api/webhook" },
     { "source": "/dashboard", "destination": "/api/dashboard" },
     { "source": "/logs", "destination": "/api/logs" },
     { "source": "/webhook/:path*", "destination": "/api/webhook/:path*" }
