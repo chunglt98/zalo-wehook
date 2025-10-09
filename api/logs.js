@@ -24,9 +24,9 @@ export default async function handler(req, res) {
         return `
         <div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:12px;background:#fff;">
           <div style="font-weight:bold;color:#444;">#${logs.length - index}</div>
-          <div style="color:#666;font-size:13px;">⏰ ${new Date(
-            log.timestamp
-          ).toLocaleString('vi-VN')}</div>
+          <div style="color:#666;font-size:13px;">
+            ⏰ ${formatVNTime(log.timestamp)}
+          </div>
           <div style="margin-top:8px;">🎯 Event: ${eventName}</div>
           <div style="margin-top:6px;">📦 Payload:</div>
           <pre style="background:#f7f7f7;border-radius:6px;padding:8px;overflow:auto;font-size:13px;">${JSON.stringify(
@@ -45,7 +45,11 @@ export default async function handler(req, res) {
       <meta charset="UTF-8" />
       <title>Webhook Logs - ${endpoint}</title>
       <style>
-        body { font-family: "Segoe UI", sans-serif; background:#f4f6fb; margin:0; padding:20px; }
+        body {
+          font-family: "Segoe UI", sans-serif;
+          background:#f4f6fb;
+          margin:0; padding:20px;
+        }
         h1 { color:#333; text-align:center; margin-bottom:30px; }
       </style>
     </head>
@@ -63,5 +67,15 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error fetching logs:', error);
     return res.status(500).send('<p>Lỗi tải logs</p>');
+  }
+}
+
+// ✅ Hàm format giờ Việt Nam (GMT+7)
+function formatVNTime(date) {
+  if (!date) return '';
+  try {
+    return new Date(date).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+  } catch {
+    return new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
   }
 }
