@@ -1,32 +1,5 @@
 import { createClient } from '@vercel/kv';
 
-export const config = {
-  runtime: 'nodejs', // ép chạy Node.js chứ không phải Edge
-  api: {
-    bodyParser: true, // đảm bảo parse JSON cho webhook
-  },
-};
-
-
-export default async function handler(req, res) {
-  // ✅ Nếu là request GET (Zalo đang xác thực domain)
-  if (req.method === 'GET') {
-    const { verify_token } = req.query;
-
-    // Log cho dễ debug
-    console.log('🔍 Zalo verification request:', verify_token);
-
-    // Trả lại đúng token cho Zalo
-    if (verify_token) {
-      return res.status(200).send(verify_token);
-    } else {
-      return res.status(400).send('Missing verify_token');
-    }
-  }
-
-  // ... các xử lý POST webhook khác bên dưới
-}
-
 
 export default async function handler(req, res) {
   // Kiểm tra method
