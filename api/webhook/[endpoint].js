@@ -1,5 +1,3 @@
-import { createClient } from '@vercel/kv';
-
 export default async function handler(req, res) {
   // Chỉ accept POST
   if (req.method !== 'POST') {
@@ -13,81 +11,95 @@ export default async function handler(req, res) {
   const logData = {
     timestamp: new Date().toISOString(),
     endpoint: endpoint,
-    body: req.body,
-    headers: {
-      'user-agent': req.headers['user-agent'],
-      'content-type': req.headers['content-type']
-    }
+    body: req.body
   };
 
-  console.log('📥 Webhook received:', endpoint, JSON.stringify(logData, null, 2));
+  console.log('📥 Webhook received:', endpoint);
 
-  // Check environment variables
+  // Lấy credentials từ env
   const kvUrl = process.env.KV_REST_API_URL;
   const kvToken = process.env.KV_REST_API_TOKEN;
   
-  console.log('Environment check:', {
+  console.log('Env check:', {
     hasUrl: !!kvUrl,
     hasToken: !!kvToken,
-    url: kvUrl ? kvUrl.substring(0, 30) + '...' : 'missing'
+    allEnvKeys: Object.keys(process.env).filter(k => k.includes('KV') || k.includes('REDIS'))
   });
 
   if (!kvUrl || !kvToken) {
-    console.error('Missing KV credentials');
     return res.status(200).json({
       status: 'ok',
       endpoint: endpoint,
       received_at: logData.timestamp,
-      note: 'Received but database not configured',
-      error: 'Missing KV_REST_API_URL or KV_REST_API_TOKEN'
+      note: 'Database not configured',
+      debug: {
+        envKeys: Object.keys(process.env).filter(k => k.includes('KV') || k.includes('REDIS'))
+      }
     });
   }
 
-  // Try to save to KV
+  // Dùng REST API trực tiếp
   try {
-    const kv = createClient({
-      url: kvUrl,
-      token: kvToken,
-    });
-    
     const key = `webhook:${endpoint}`;
     
-    // Lấy logs cũ
+    // Get existing logs
     let existingLogs = [];
     try {
-      existingLogs = await kv.get(key) || [];
+      const getResponse = await fetch(`${kvUrl}/get/${key}`, {
+        headers: { 'Authorization': `Bearer ${kvToken}` }
+      });
+      const getData = await getResponse.json();
+      if (getData.result) {
+        existingLogs = JSON.parse(getData.result);
+      }
     } catch (e) {
-      console.error('Error getting existing logs:', e);
-      existingLogs = [];
+      console.log('No existing logs or error:', e.message);
     }
     
-    // Thêm log mới
+    // Add new log
     existingLogs.unshift(logData);
-    
-    // Giữ tối đa 100 logs
     if (existingLogs.length > 100) {
       existingLogs.length = 100;
     }
     
-    // Lưu lại
-    await kv.set(key, existingLogs);
+    // Save back
+    await fetch(`${kvUrl}/set/${key}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${kvToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(existingLogs)
+    });
     
-    // Cập nhật danh sách endpoints
+    // Update endpoints list
     const endpointsKey = 'webhook:endpoints';
     let endpoints = [];
     try {
-      endpoints = await kv.get(endpointsKey) || [];
+      const getEndpoints = await fetch(`${kvUrl}/get/${endpointsKey}`, {
+        headers: { 'Authorization': `Bearer ${kvToken}` }
+      });
+      const endpointsData = await getEndpoints.json();
+      if (endpointsData.result) {
+        endpoints = JSON.parse(endpointsData.result);
+      }
     } catch (e) {
-      console.error('Error getting endpoints:', e);
-      endpoints = [];
+      console.log('No existing endpoints');
     }
     
     if (!endpoints.includes(endpoint)) {
       endpoints.push(endpoint);
-      await kv.set(endpointsKey, endpoints);
+      await fetch(`${kvUrl}/set/${endpointsKey}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${kvToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(endpoints)
+      });
     }
 
-    console.log('✅ Saved to KV successfully');
+    console.log('✅ Saved successfully');
     
     return res.status(200).json({
       status: 'ok',
@@ -96,18 +108,13 @@ export default async function handler(req, res) {
     });
     
   } catch (error) {
-    console.error('❌ Error saving webhook:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name
-    });
+    console.error('❌ Error:', error);
     
     return res.status(200).json({
       status: 'ok',
       endpoint: endpoint,
       received_at: logData.timestamp,
-      note: 'Received but failed to save to database',
+      note: 'Failed to save',
       error: error.message
     });
   }
