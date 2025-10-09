@@ -1,3 +1,12 @@
+console.log("ENV DEBUG:", {
+  KV_REST_API_URL: process.env.KV_REST_API_URL,
+  KV_REST_API_TOKEN_EXISTS: !!process.env.KV_REST_API_TOKEN,
+  KV_URL_EXISTS: !!process.env.KV_URL,
+  NODE_ENV: process.env.NODE_ENV
+});
+
+
+
 console.log("✅ KV_REST_API_URL:", process.env.KV_REST_API_URL);
 console.log("✅ KV_REST_API_TOKEN exists:", !!process.env.KV_REST_API_TOKEN);
 
