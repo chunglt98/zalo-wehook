@@ -24,7 +24,10 @@ export default async function handler(req, res) {
   }
 
   // Lấy endpoint name từ URL
-  const endpoint = req.url.replace('/api/webhook/', '').split('?')[0];
+  const endpoint = req.url
+  .replace(/^\/(api\/)?webhook\//, '') // cắt cả /api/webhook/ hoặc /webhook/
+  .split('?')[0];
+
   
   // Log data
   const logData = {
