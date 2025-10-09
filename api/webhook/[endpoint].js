@@ -1,3 +1,5 @@
+import { createClient } from '@vercel/kv';
+
 export default async function handler(req, res) {
   // Chỉ accept POST
   if (req.method !== 'POST') {
@@ -20,9 +22,33 @@ export default async function handler(req, res) {
 
   console.log('📥 Webhook received:', endpoint, JSON.stringify(logData, null, 2));
 
+  // Check environment variables
+  const kvUrl = process.env.KV_REST_API_URL;
+  const kvToken = process.env.KV_REST_API_TOKEN;
+  
+  console.log('Environment check:', {
+    hasUrl: !!kvUrl,
+    hasToken: !!kvToken,
+    url: kvUrl ? kvUrl.substring(0, 30) + '...' : 'missing'
+  });
+
+  if (!kvUrl || !kvToken) {
+    console.error('Missing KV credentials');
+    return res.status(200).json({
+      status: 'ok',
+      endpoint: endpoint,
+      received_at: logData.timestamp,
+      note: 'Received but database not configured',
+      error: 'Missing KV_REST_API_URL or KV_REST_API_TOKEN'
+    });
+  }
+
   // Try to save to KV
   try {
-    const { kv } = await import('@vercel/kv');
+    const kv = createClient({
+      url: kvUrl,
+      token: kvToken,
+    });
     
     const key = `webhook:${endpoint}`;
     
@@ -77,7 +103,6 @@ export default async function handler(req, res) {
       name: error.name
     });
     
-    // Vẫn trả về success nhưng log error
     return res.status(200).json({
       status: 'ok',
       endpoint: endpoint,
