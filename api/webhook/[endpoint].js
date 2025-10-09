@@ -1,3 +1,9 @@
+process.env.KV_REST_API_URL = process.env.STORAGE_KV_REST_API_URL;
+process.env.KV_REST_API_TOKEN = process.env.STORAGE_KV_REST_API_TOKEN;
+process.env.KV_REST_API_READ_ONLY_TOKEN = process.env.STORAGE_KV_REST_API_READ_ONLY_TOKEN;
+process.env.KV_URL = process.env.STORAGE_KV_URL;
+
+
 export default async function handler(req, res) {
   // Chỉ accept POST
   if (req.method !== 'POST') {
