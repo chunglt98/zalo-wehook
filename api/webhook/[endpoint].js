@@ -1,5 +1,13 @@
 import { createClient } from '@vercel/kv';
 
+export const config = {
+  runtime: 'nodejs', // ép chạy Node.js chứ không phải Edge
+  api: {
+    bodyParser: true, // đảm bảo parse JSON cho webhook
+  },
+};
+
+
 export default async function handler(req, res) {
   // ✅ Nếu là request GET (Zalo đang xác thực domain)
   if (req.method === 'GET') {
