@@ -1,143 +1,72 @@
-console.log("ENV DEBUG:", {
-  KV_REST_API_URL: process.env.KV_REST_API_URL,
-  KV_REST_API_TOKEN_EXISTS: !!process.env.KV_REST_API_TOKEN,
-  KV_URL_EXISTS: !!process.env.KV_URL,
-  NODE_ENV: process.env.NODE_ENV
-});
-
-
-
-console.log("✅ KV_REST_API_URL:", process.env.KV_REST_API_URL);
-console.log("✅ KV_REST_API_TOKEN exists:", !!process.env.KV_REST_API_TOKEN);
-
-
-process.env.KV_REST_API_URL = process.env.STORAGE_KV_REST_API_URL;
-process.env.KV_REST_API_TOKEN = process.env.STORAGE_KV_REST_API_TOKEN;
-process.env.KV_REST_API_READ_ONLY_TOKEN = process.env.STORAGE_KV_REST_API_READ_ONLY_TOKEN;
-process.env.KV_URL = process.env.STORAGE_KV_URL;
-
+import { createClient } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  // Chỉ accept POST
+  // Kiểm tra method
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Lấy endpoint name từ URL
-  const endpoint = req.url
-  .replace(/^\/(api\/)?webhook\//, '') // cắt cả /api/webhook/ hoặc /webhook/
-  .split('?')[0];
-
-  
-  // Log data
-  const logData = {
-    timestamp: new Date().toISOString(),
-    endpoint: endpoint,
-    body: req.body
-  };
-
-  console.log('📥 Webhook received:', endpoint);
-
-  // Lấy credentials từ env
-  const kvUrl = process.env.KV_REST_API_URL;
-  const kvToken = process.env.KV_REST_API_TOKEN;
-  
-  console.log('Env check:', {
-    hasUrl: !!kvUrl,
-    hasToken: !!kvToken,
-    allEnvKeys: Object.keys(process.env).filter(k => k.includes('KV') || k.includes('REDIS'))
+  // Debug env
+  console.log('ENV DEBUG:', {
+    KV_REST_API_URL: process.env.KV_REST_API_URL,
+    KV_REST_API_TOKEN_EXISTS: !!process.env.KV_REST_API_TOKEN
   });
 
-  if (!kvUrl || !kvToken) {
-    return res.status(200).json({
-      status: 'ok',
-      endpoint: endpoint,
-      received_at: logData.timestamp,
-      note: 'Database not configured',
-      debug: {
-        envKeys: Object.keys(process.env).filter(k => k.includes('KV') || k.includes('REDIS'))
-      }
-    });
-  }
+  // Khởi tạo client KV thủ công để tránh lỗi import static
+  const kv = createClient({
+    url: process.env.KV_REST_API_URL,
+    token: process.env.KV_REST_API_TOKEN
+  });
 
-  // Dùng REST API trực tiếp
+  // Lấy endpoint name
+  const endpoint = req.url.replace(/^\/(api\/)?webhook\//, '').split('?')[0];
+
+  // Dữ liệu log
+  const logData = {
+    timestamp: new Date().toISOString(),
+    endpoint,
+    body: req.body,
+    headers: {
+      'user-agent': req.headers['user-agent'],
+      'content-type': req.headers['content-type']
+    }
+  };
+
+  console.log('📥 Webhook received:', endpoint, logData);
+
   try {
     const key = `webhook:${endpoint}`;
-    
-    // Get existing logs
-    let existingLogs = [];
-    try {
-      const getResponse = await fetch(`${kvUrl}/get/${key}`, {
-        headers: { 'Authorization': `Bearer ${kvToken}` }
-      });
-      const getData = await getResponse.json();
-      if (getData.result) {
-        existingLogs = JSON.parse(getData.result);
-      }
-    } catch (e) {
-      console.log('No existing logs or error:', e.message);
-    }
-    
-    // Add new log
+
+    // Lấy logs cũ
+    const existingLogs = (await kv.get(key)) || [];
     existingLogs.unshift(logData);
-    if (existingLogs.length > 100) {
-      existingLogs.length = 100;
-    }
-    
-    // Save back
-    await fetch(`${kvUrl}/set/${key}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${kvToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(existingLogs)
-    });
-    
-    // Update endpoints list
+    if (existingLogs.length > 100) existingLogs.length = 100;
+
+    // Ghi lại log
+    await kv.set(key, existingLogs);
+
+    // Ghi danh sách endpoints
     const endpointsKey = 'webhook:endpoints';
-    let endpoints = [];
-    try {
-      const getEndpoints = await fetch(`${kvUrl}/get/${endpointsKey}`, {
-        headers: { 'Authorization': `Bearer ${kvToken}` }
-      });
-      const endpointsData = await getEndpoints.json();
-      if (endpointsData.result) {
-        endpoints = JSON.parse(endpointsData.result);
-      }
-    } catch (e) {
-      console.log('No existing endpoints');
-    }
-    
+    const endpoints = (await kv.get(endpointsKey)) || [];
     if (!endpoints.includes(endpoint)) {
       endpoints.push(endpoint);
-      await fetch(`${kvUrl}/set/${endpointsKey}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${kvToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(endpoints)
-      });
+      await kv.set(endpointsKey, endpoints);
     }
 
-    console.log('✅ Saved successfully');
-    
     return res.status(200).json({
       status: 'ok',
-      endpoint: endpoint,
-      received_at: logData.timestamp
+      endpoint,
+      received_at: logData.timestamp,
+      note: 'Saved successfully'
     });
-    
   } catch (error) {
-    console.error('❌ Error:', error);
-    
-    return res.status(200).json({
+    console.error('❌ Error saving webhook:', error);
+    return res.status(500).json({
       status: 'ok',
-      endpoint: endpoint,
+      endpoint,
       received_at: logData.timestamp,
       note: 'Failed to save',
-      error: error.message
+      error: String(error.message || error)
     });
   }
 }
