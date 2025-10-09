@@ -1,5 +1,3 @@
-import { kv } from '@vercel/kv';
-
 export default async function handler(req, res) {
   // Chỉ accept POST
   if (req.method !== 'POST') {
@@ -22,17 +20,25 @@ export default async function handler(req, res) {
 
   console.log('📥 Webhook received:', endpoint, JSON.stringify(logData, null, 2));
 
+  // Try to save to KV
   try {
-    // Lưu vào Vercel KV (Redis)
+    const { kv } = await import('@vercel/kv');
+    
     const key = `webhook:${endpoint}`;
     
     // Lấy logs cũ
-    const existingLogs = await kv.get(key) || [];
+    let existingLogs = [];
+    try {
+      existingLogs = await kv.get(key) || [];
+    } catch (e) {
+      console.error('Error getting existing logs:', e);
+      existingLogs = [];
+    }
     
-    // Thêm log mới vào đầu
+    // Thêm log mới
     existingLogs.unshift(logData);
     
-    // Giữ tối đa 100 logs gần nhất
+    // Giữ tối đa 100 logs
     if (existingLogs.length > 100) {
       existingLogs.length = 100;
     }
@@ -42,12 +48,21 @@ export default async function handler(req, res) {
     
     // Cập nhật danh sách endpoints
     const endpointsKey = 'webhook:endpoints';
-    const endpoints = await kv.get(endpointsKey) || [];
+    let endpoints = [];
+    try {
+      endpoints = await kv.get(endpointsKey) || [];
+    } catch (e) {
+      console.error('Error getting endpoints:', e);
+      endpoints = [];
+    }
+    
     if (!endpoints.includes(endpoint)) {
       endpoints.push(endpoint);
       await kv.set(endpointsKey, endpoints);
     }
 
+    console.log('✅ Saved to KV successfully');
+    
     return res.status(200).json({
       status: 'ok',
       endpoint: endpoint,
@@ -55,7 +70,20 @@ export default async function handler(req, res) {
     });
     
   } catch (error) {
-    console.error('Error saving webhook:', error);
-    return res.status(500).json({ error: 'Failed to save webhook' });
+    console.error('❌ Error saving webhook:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+    
+    // Vẫn trả về success nhưng log error
+    return res.status(200).json({
+      status: 'ok',
+      endpoint: endpoint,
+      received_at: logData.timestamp,
+      note: 'Received but failed to save to database',
+      error: error.message
+    });
   }
 }
