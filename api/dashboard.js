@@ -4,7 +4,6 @@ export default async function handler(req, res) {
   res.setHeader('Content-Type', 'text/html');
 
   try {
-    // Lấy danh sách endpoints
     const endpoints = (await kv.get('webhook:endpoints')) || [];
 
     // Lấy dữ liệu từng endpoint
@@ -25,7 +24,6 @@ export default async function handler(req, res) {
 
     const totalEvents = stats.reduce((sum, s) => sum + s.events, 0);
 
-    // HTML
     const html = `
     <!DOCTYPE html>
     <html lang="vi">
@@ -54,13 +52,22 @@ export default async function handler(req, res) {
         .endpoint {
           background: white; padding: 20px; border-radius: 10px;
           box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+          transition: transform 0.2s ease;
         }
+        .endpoint:hover { transform: scale(1.02); }
         .endpoint h2 { margin: 0; color: #333; }
         .info { color: #666; font-size: 14px; margin-top: 6px; }
         .actions { margin-top: 12px; }
         a.btn {
           text-decoration: none; color: white; background: #0078ff;
           padding: 6px 14px; border-radius: 6px; margin-right: 8px;
+        }
+        #last-refresh {
+          text-align:center; color:#888; font-size:13px; margin-top:20px;
+        }
+        #loading {
+          text-align:center; color:#0078ff; font-size:14px;
+          display:none; margin-bottom:15px;
         }
       </style>
     </head>
@@ -70,31 +77,33 @@ export default async function handler(req, res) {
         <div class="stat-card"><span>${stats.length}</span>Endpoints</div>
         <div class="stat-card"><span>${totalEvents}</span>Total Events</div>
       </div>
-      <div class="endpoint-list">
-        ${
-          stats.length === 0
-            ? '<p style="text-align:center;color:#888;">Chưa có webhook nào được nhận.</p>'
-            : stats
-                .map(
-                  (s) => `
-              <div class="endpoint">
-                <h2>${s.name}</h2>
-                <div class="info">
-                  📅 Lần cập nhật gần nhất: ${
-                    s.lastUpdate
-                      ? s.lastUpdate.toLocaleString('vi-VN')
-                      : 'Chưa có dữ liệu'
-                  }<br>
-                  🧩 Tổng số event: <b>${s.events}</b>
-                </div>
-                <div class="actions">
-                  <a class="btn" href="/logs?endpoint=${s.name}" target="_blank">Xem log</a>
-                </div>
-              </div>`
-                )
-                .join('')
-        }
+
+      <div id="loading">⏳ Đang tải dữ liệu mới...</div>
+
+      <div class="endpoint-list" id="endpoint-list">
+        ${renderEndpoints(stats)}
       </div>
+
+      <div id="last-refresh">Cập nhật lần cuối: ${formatVNTime(new Date())}</div>
+
+      <script>
+        async function refreshData() {
+          const loading = document.getElementById('loading');
+          loading.style.display = 'block';
+          try {
+            const res = await fetch('/api/dashboard-data');
+            const html = await res.text();
+            document.getElementById('endpoint-list').innerHTML = html;
+            document.getElementById('last-refresh').innerText =
+              'Cập nhật lần cuối: ' + new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+          } catch (err) {
+            console.error(err);
+          } finally {
+            loading.style.display = 'none';
+          }
+        }
+        setInterval(refreshData, 3000); // 🔁 refresh mỗi 3s
+      </script>
     </body>
     </html>`;
 
@@ -103,4 +112,33 @@ export default async function handler(req, res) {
     console.error('Error loading dashboard:', error);
     return res.status(500).send('Lỗi tải dashboard');
   }
+}
+
+function renderEndpoints(stats) {
+  if (stats.length === 0)
+    return '<p style="text-align:center;color:#888;">Chưa có webhook nào được nhận.</p>';
+
+  return stats
+    .map(
+      (s) => `
+      <div class="endpoint">
+        <h2>${s.name}</h2>
+        <div class="info">
+          📅 Lần cập nhật gần nhất: ${
+            s.lastUpdate
+              ? formatVNTime(s.lastUpdate)
+              : 'Chưa có dữ liệu'
+          }<br>
+          🧩 Tổng số event: <b>${s.events}</b>
+        </div>
+        <div class="actions">
+          <a class="btn" href="/logs?endpoint=${s.name}" target="_blank">Xem log</a>
+        </div>
+      </div>`
+    )
+    .join('');
+}
+
+function formatVNTime(date) {
+  return new Date(date).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 }
