@@ -1,76 +1,69 @@
 import { createClient } from '@vercel/kv';
 
-// ✅ Cấu hình runtime ổn định cho Vercel
-export const config = {
-  runtime: 'nodejs',
-  api: { bodyParser: true },
-};
-
 export default async function handler(req, res) {
-  const endpoint = req.url.replace(/^\/(api\/)?webhook\//, '').split('?')[0];
+  const { endpoint } = req.query;
+  
+  const kv = createClient({
+    url: process.env.KV_REST_API_URL?.trim().replace(/\/$/, ''),
+    token: process.env.KV_REST_API_TOKEN,
+  });
 
-  // 👉 1️⃣ Zalo gọi GET để xác thực domain
-  if (req.method === 'GET') {
-    const { verify_token } = req.query;
-    console.log('🔍 Zalo verifying:', verify_token);
-    if (verify_token) return res.status(200).send(verify_token);
-    return res.status(400).send('Missing verify_token');
-  }
-
-  // 👉 2️⃣ Zalo gửi event qua POST
-  if (req.method === 'POST') {
-    console.log('📥 Webhook received:', endpoint, req.body);
-
-    // Tạo client KV
-    const kv = createClient({
-      url: process.env.KV_REST_API_URL?.trim().replace(/\/$/, ''),
-      token: process.env.KV_REST_API_TOKEN,
-    });
-
-    const logData = {
-      timestamp: new Date().toISOString(),
-      endpoint,
-      body: req.body,
-      headers: {
-        'user-agent': req.headers['user-agent'],
-        'content-type': req.headers['content-type'],
-      },
-    };
-
-    try {
-      // Lưu log
+  try {
+    if (endpoint) {
+      // Lấy logs của 1 endpoint (dùng LRANGE với list)
       const key = `webhook:${endpoint}`;
-      const existing = (await kv.get(key)) || [];
-      existing.unshift(logData);
-      if (existing.length > 100) existing.length = 100;
-      await kv.set(key, existing);
-
-      // Cập nhật danh sách endpoints
-      const endpointsKey = 'webhook:endpoints';
-      const endpoints = (await kv.get(endpointsKey)) || [];
-      if (!endpoints.includes(endpoint)) {
-        endpoints.push(endpoint);
-        await kv.set(endpointsKey, endpoints);
+      const logs = await kv.lrange(key, 0, 99);
+      
+      if (logs && logs.length > 0) {
+        // Parse JSON strings
+        const parsedLogs = logs.map(item => 
+          typeof item === 'string' ? JSON.parse(item) : item
+        );
+        
+        const text = parsedLogs.map(log => 
+          `${'='.repeat(60)}\n` +
+          `[${log.timestamp}] ID: ${log.id}\n` +
+          `Endpoint: ${log.endpoint}\n` +
+          `Body: ${JSON.stringify(log.body, null, 2)}\n`
+        ).join('\n');
+        
+        return res.status(200).send(text);
+      } else {
+        return res.status(200).send('No logs found');
       }
-
-      return res.status(200).json({
-        status: 'ok',
-        endpoint,
-        received_at: logData.timestamp,
-        note: 'Saved successfully',
-      });
-    } catch (error) {
-      console.error('❌ Error saving webhook:', error);
-      return res.status(200).json({
-        status: 'ok',
-        endpoint,
-        received_at: new Date().toISOString(),
-        note: 'Failed to save',
-        error: String(error.message || error),
-      });
+      
+    } else {
+      // Lấy danh sách endpoints (dùng SMEMBERS với set)
+      const endpointsKey = 'webhook:endpoints';
+      const endpoints = await kv.smembers(endpointsKey) || [];
+      
+      // Get stats for each endpoint
+      const stats = await Promise.all(
+        endpoints.map(async (ep) => {
+          const key = `webhook:${ep}`;
+          const count = await kv.llen(key) || 0;
+          
+          // Get latest log
+          const latest = await kv.lindex(key, 0);
+          let lastUpdate = null;
+          if (latest) {
+            const log = typeof latest === 'string' ? JSON.parse(latest) : latest;
+            lastUpdate = log.timestamp;
+          }
+          
+          return {
+            name: ep,
+            events: count,
+            lastUpdate: lastUpdate
+          };
+        })
+      );
+      
+      return res.status(200).json({ endpoints: stats });
     }
+    
+  } catch (error) {
+    console.error('Error:', error);
+    return res.status(500).json({ error: error.message });
   }
-
-  // 👉 3️⃣ Các method khác (PUT, DELETE, v.v.)
-  return res.status(405).send('Method not allowed');
 }
