@@ -10,24 +10,19 @@ export default async function handler(req, res) {
       token: process.env.KV_REST_API_TOKEN,
     });
 
-    // 🔥 FIX: Đọc endpoints từ Redis Set (SMEMBERS) thay vì GET
+    // Đọc endpoints từ Redis Set
     const endpoints = await kv.smembers('webhook:endpoints') || [];
 
     // Lấy dữ liệu từng endpoint
     const stats = await Promise.all(
       endpoints.map(async (ep) => {
         const key = `webhook:${ep}`;
-        
-        // 🔥 FIX: Đếm số logs bằng LLEN (List) thay vì GET
         const count = await kv.llen(key) || 0;
-        
-        // 🔥 FIX: Lấy log mới nhất bằng LINDEX (List) thay vì GET
         const latestLog = await kv.lindex(key, 0);
         
         let lastUpdate = null;
         if (latestLog) {
           try {
-            // Parse JSON string thành object
             const log = typeof latestLog === 'string' ? JSON.parse(latestLog) : latestLog;
             lastUpdate = log.timestamp ? new Date(log.timestamp) : null;
           } catch (e) {
@@ -43,7 +38,7 @@ export default async function handler(req, res) {
       })
     );
 
-    // ✅ Sắp xếp theo thời gian giảm dần (mới nhất lên đầu)
+    // Sắp xếp theo thời gian giảm dần
     stats.sort((a, b) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
 
     const totalEvents = stats.reduce((sum, s) => sum + s.events, 0);
@@ -115,14 +110,7 @@ export default async function handler(req, res) {
 
       <div id="last-refresh">
         Cập nhật lần cuối: ${formatVNTime(new Date())}
-        <br>
-        <small>Tự động refresh sau 5 giây...</small>
       </div>
-
-      <script>
-        // Auto-refresh sau 5 giây
-        setTimeout(() => location.reload(), 5000);
-      </script>
     </body>
     </html>`;
 
