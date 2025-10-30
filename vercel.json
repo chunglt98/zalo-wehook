@@ -3,8 +3,6 @@
     { "source": "/dashboard", "destination": "/api/dashboard" },
     { "source": "/logs", "destination": "/api/logs" },
     { "source": "/webhook/:path*", "destination": "/api/webhook/:path*" },
-
-    // --- Cuối cùng: bắt mọi path (chỉ chạy khi các rule trên không match) ---
     { "source": "/:path*", "destination": "/api/webhook/:path*" }
   ]
 }
