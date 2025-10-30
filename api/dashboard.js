@@ -19,16 +19,57 @@ export default async function handler(req, res) {
   });
 
   try {
-    // 🧹 Kiểm tra key endpoint
     const endpointsKey = 'webhook:endpoints';
-    let endpoints = await kv.smembers(endpointsKey) || [];
+    let endpoints = [];
+
+    // 🔧 TRY: Đọc bằng smembers (cho SET - code mới)
+    try {
+      endpoints = await kv.smembers(endpointsKey) || [];
+    } catch (e) {
+      // Nếu lỗi WRONGTYPE → Key là kiểu cũ, cần reset
+      if (e.message.includes('WRONGTYPE')) {
+        console.warn('⚠️ Resetting malformed key:', endpointsKey);
+        await kv.del(endpointsKey);
+        
+        // Quét tất cả key webhook:* để rebuild danh sách endpoints
+        // Lấy từ các key webhook:{endpoint} có sẵn
+        const allKeys = await kv.keys('webhook:*') || [];
+        endpoints = allKeys
+          .filter(k => k !== endpointsKey)
+          .map(k => k.replace('webhook:', ''));
+        
+        // Tạo lại SET
+        if (endpoints.length > 0) {
+          await kv.sadd(endpointsKey, ...endpoints);
+        }
+        
+        console.log('✅ Rebuilt endpoints:', endpoints);
+      } else {
+        throw e; // Lỗi khác thì throw lên
+      }
+    }
 
     // 🔄 Lấy thống kê từng endpoint
     const stats = await Promise.all(
       endpoints.map(async (ep) => {
         try {
-          const count = await kv.llen(`webhook:${ep}`) || 0;
-          const latestLog = await kv.lindex(`webhook:${ep}`, 0);
+          // Kiểm tra key có phải LIST không
+          let count = 0;
+          let latestLog = null;
+          
+          try {
+            count = await kv.llen(`webhook:${ep}`) || 0;
+            latestLog = await kv.lindex(`webhook:${ep}`, 0);
+          } catch (e) {
+            // Nếu key không phải LIST, thử GET (code cũ)
+            if (e.message.includes('WRONGTYPE')) {
+              const oldData = await kv.get(`webhook:${ep}`);
+              if (Array.isArray(oldData)) {
+                count = oldData.length;
+                latestLog = oldData[0];
+              }
+            }
+          }
           
           let lastUpdate = null;
           if (latestLog) {
