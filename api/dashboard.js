@@ -22,38 +22,26 @@ export default async function handler(req, res) {
     const endpointsKey = 'webhook:endpoints';
     let endpoints = [];
 
-    // 🔧 TRY: Đọc bằng smembers (cho SET - code mới)
+    // 🔧 Auto-fix WRONGTYPE error
     try {
       endpoints = await kv.smembers(endpointsKey) || [];
     } catch (e) {
-      // Nếu lỗi WRONGTYPE → Key là kiểu cũ, cần reset
       if (e.message.includes('WRONGTYPE')) {
-        console.warn('⚠️ Resetting malformed key:', endpointsKey);
         await kv.del(endpointsKey);
-        
-        // Quét tất cả key webhook:* để rebuild danh sách endpoints
-        // Lấy từ các key webhook:{endpoint} có sẵn
         const allKeys = await kv.keys('webhook:*') || [];
         endpoints = allKeys
           .filter(k => k !== endpointsKey)
           .map(k => k.replace('webhook:', ''));
-        
-        // Tạo lại SET
         if (endpoints.length > 0) {
           await kv.sadd(endpointsKey, ...endpoints);
         }
-        
-        console.log('✅ Rebuilt endpoints:', endpoints);
-      } else {
-        throw e; // Lỗi khác thì throw lên
       }
     }
 
-    // 🔄 Lấy thống kê từng endpoint
+    // Lấy thống kê
     const stats = await Promise.all(
       endpoints.map(async (ep) => {
         try {
-          // Kiểm tra key có phải LIST không
           let count = 0;
           let latestLog = null;
           
@@ -61,7 +49,6 @@ export default async function handler(req, res) {
             count = await kv.llen(`webhook:${ep}`) || 0;
             latestLog = await kv.lindex(`webhook:${ep}`, 0);
           } catch (e) {
-            // Nếu key không phải LIST, thử GET (code cũ)
             if (e.message.includes('WRONGTYPE')) {
               const oldData = await kv.get(`webhook:${ep}`);
               if (Array.isArray(oldData)) {
@@ -75,33 +62,25 @@ export default async function handler(req, res) {
           if (latestLog) {
             try {
               const log = typeof latestLog === 'string' ? JSON.parse(latestLog) : latestLog;
-              lastUpdate = log.timestamp ? toGMT7(log.timestamp) : null;
-            } catch (e) {
-              console.error('Parse error:', e);
-            }
+              lastUpdate = log.timestamp || null;
+            } catch (e) {}
           }
           
-          return {
-            name: ep,
-            events: count,
-            lastUpdate,
-          };
+          return { name: ep, events: count, lastUpdate };
         } catch (err) {
-          console.warn(`⚠️ Error loading endpoint: ${ep}`, err.message);
           return { name: ep, events: 0, lastUpdate: null };
         }
       })
     );
 
-    // Sắp xếp theo thời gian mới nhất
+    // ✅ Sắp xếp theo thời gian MỚI NHẤT lên đầu
     stats.sort((a, b) => {
       if (!a.lastUpdate) return 1;
       if (!b.lastUpdate) return -1;
-      return b.lastUpdate.localeCompare(a.lastUpdate);
+      return new Date(b.lastUpdate) - new Date(a.lastUpdate);
     });
 
     const totalEvents = stats.reduce((sum, s) => sum + s.events, 0);
-    const activeEndpoints = stats.filter(s => s.events > 0).length;
 
     const html = `
 <!DOCTYPE html>
@@ -109,402 +88,182 @@ export default async function handler(req, res) {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔔 Webhook Dashboard - Zalo Events</title>
+  <title>Webhook Dashboard</title>
   <style>
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
-
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
       padding: 20px;
-      color: #333;
+      line-height: 1.6;
     }
-
     .container {
-      max-width: 1200px;
+      max-width: 1000px;
       margin: 0 auto;
     }
-
-    .header {
-      text-align: center;
-      color: white;
-      margin-bottom: 40px;
-      animation: fadeInDown 0.6s ease-out;
-    }
-
-    .header h1 {
-      font-size: 2.5em;
-      margin-bottom: 10px;
-      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
-    }
-
-    .header p {
-      font-size: 1.1em;
-      opacity: 0.9;
-    }
-
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 20px;
-      margin-bottom: 40px;
-      animation: fadeInUp 0.6s ease-out 0.2s both;
-    }
-
-    .stat-card {
-      background: white;
-      border-radius: 16px;
-      padding: 30px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-      text-align: center;
-      transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-
-    .stat-card:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
-    }
-
-    .stat-card .icon {
-      font-size: 3em;
-      margin-bottom: 10px;
-    }
-
-    .stat-card .number {
-      font-size: 3em;
-      font-weight: bold;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin-bottom: 5px;
-    }
-
-    .stat-card .label {
-      font-size: 1em;
-      color: #666;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      font-weight: 500;
-    }
-
-    .endpoints-section {
-      animation: fadeInUp 0.6s ease-out 0.4s both;
-    }
-
-    .section-header {
-      background: white;
-      border-radius: 16px 16px 0 0;
-      padding: 20px 30px;
-      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    .section-header h2 {
-      font-size: 1.5em;
+    h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
       color: #333;
     }
-
+    .summary {
+      background: white;
+      padding: 15px 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+    }
+    .summary-item {
+      font-size: 14px;
+      color: #666;
+    }
+    .summary-item strong {
+      color: #333;
+      font-size: 18px;
+    }
     .refresh-btn {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #0066cc;
       color: white;
       border: none;
-      border-radius: 8px;
-      padding: 10px 20px;
-      font-size: 0.9em;
+      padding: 8px 16px;
+      border-radius: 6px;
       cursor: pointer;
-      transition: transform 0.2s ease, box-shadow 0.2s ease;
-      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 20px;
     }
-
     .refresh-btn:hover {
-      transform: scale(1.05);
-      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+      background: #0052a3;
     }
-
-    .refresh-btn:active {
-      transform: scale(0.95);
-    }
-
-    .endpoints-list {
+    table {
+      width: 100%;
       background: white;
-      border-radius: 0 0 16px 16px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      border-radius: 8px;
       overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-
-    .endpoint-item {
-      padding: 25px 30px;
+    th {
+      background: #f8f9fa;
+      padding: 12px 15px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 13px;
+      color: #555;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    td {
+      padding: 12px 15px;
       border-bottom: 1px solid #f0f0f0;
-      transition: background 0.2s ease;
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 20px;
-      align-items: center;
+      font-size: 14px;
     }
-
-    .endpoint-item:last-child {
+    tr:last-child td {
       border-bottom: none;
     }
-
-    .endpoint-item:hover {
-      background: #f8f9ff;
+    tr:hover {
+      background: #f8f9fa;
     }
-
-    .endpoint-info {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
     .endpoint-name {
-      font-size: 1.3em;
-      font-weight: 600;
+      font-weight: 500;
       color: #333;
-      display: flex;
-      align-items: center;
-      gap: 10px;
     }
-
-    .endpoint-name::before {
-      content: "📡";
-      font-size: 1.2em;
-    }
-
-    .endpoint-meta {
-      display: flex;
-      gap: 20px;
-      flex-wrap: wrap;
-      font-size: 0.9em;
+    .time {
       color: #666;
+      font-size: 13px;
     }
-
-    .meta-item {
-      display: flex;
-      align-items: center;
-      gap: 5px;
+    .events {
+      color: #0066cc;
+      font-weight: 500;
     }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 0.85em;
-      font-weight: 600;
-    }
-
-    .view-logs-btn {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+    .view-link {
+      color: #0066cc;
       text-decoration: none;
-      padding: 12px 24px;
-      border-radius: 8px;
-      font-weight: 600;
-      transition: transform 0.2s ease, box-shadow 0.2s ease;
-      display: inline-block;
-      white-space: nowrap;
+      font-size: 13px;
     }
-
-    .view-logs-btn:hover {
-      transform: translateX(3px);
-      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    .view-link:hover {
+      text-decoration: underline;
     }
-
-    .empty-state {
-      padding: 80px 30px;
+    .empty {
       text-align: center;
+      padding: 60px 20px;
       color: #999;
+      background: white;
+      border-radius: 8px;
     }
-
-    .empty-state .icon {
-      font-size: 5em;
-      margin-bottom: 20px;
-      opacity: 0.5;
-    }
-
-    .empty-state h3 {
-      font-size: 1.5em;
-      margin-bottom: 10px;
-      color: #666;
-    }
-
-    .empty-state p {
-      font-size: 1em;
-      color: #999;
-    }
-
     .footer {
       text-align: center;
-      color: white;
-      margin-top: 40px;
-      opacity: 0.8;
-      font-size: 0.9em;
+      margin-top: 20px;
+      font-size: 12px;
+      color: #999;
     }
-
-    @keyframes fadeInDown {
-      from {
-        opacity: 0;
-        transform: translateY(-20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @keyframes fadeInUp {
-      from {
-        opacity: 0;
-        transform: translateY(20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
     @media (max-width: 768px) {
-      .header h1 {
-        font-size: 2em;
+      table {
+        font-size: 13px;
       }
-
-      .stats-grid {
-        grid-template-columns: 1fr;
+      th, td {
+        padding: 10px 8px;
       }
-
-      .endpoint-item {
-        grid-template-columns: 1fr;
-        gap: 15px;
-      }
-
-      .view-logs-btn {
-        width: 100%;
-        text-align: center;
-      }
-
-      .section-header {
-        flex-direction: column;
-        align-items: stretch;
-      }
-
-      .refresh-btn {
-        width: 100%;
-      }
-    }
-
-    .status-indicator {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      display: inline-block;
-      margin-left: 8px;
-      animation: pulse 2s infinite;
-    }
-
-    .status-active {
-      background: #10b981;
-      box-shadow: 0 0 10px #10b981;
-    }
-
-    .status-idle {
-      background: #f59e0b;
-    }
-
-    @keyframes pulse {
-      0%, 100% {
-        opacity: 1;
-      }
-      50% {
-        opacity: 0.5;
+      .time {
+        font-size: 12px;
       }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <h1>🔔 Webhook Dashboard</h1>
-      <p>Real-time monitoring for Zalo webhook events</p>
-    </div>
-
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="icon">📡</div>
-        <div class="number">${stats.length}</div>
-        <div class="label">Total Endpoints</div>
+    <h1>📡 Webhook Dashboard</h1>
+    
+    <div class="summary">
+      <div class="summary-item">
+        Endpoints: <strong>${stats.length}</strong>
       </div>
-      
-      <div class="stat-card">
-        <div class="icon">✅</div>
-        <div class="number">${activeEndpoints}</div>
-        <div class="label">Active Endpoints</div>
-      </div>
-      
-      <div class="stat-card">
-        <div class="icon">📊</div>
-        <div class="number">${totalEvents.toLocaleString()}</div>
-        <div class="label">Total Events</div>
+      <div class="summary-item">
+        Total Events: <strong>${totalEvents.toLocaleString()}</strong>
       </div>
     </div>
 
-    <div class="endpoints-section">
-      <div class="section-header">
-        <h2>📋 Endpoints</h2>
-        <button class="refresh-btn" onclick="location.reload()">🔄 Refresh</button>
+    <button class="refresh-btn" onclick="location.reload()">🔄 Refresh</button>
+
+    ${stats.length === 0 ? `
+      <div class="empty">
+        <p>📭 No webhooks yet. Waiting for events...</p>
       </div>
-      
-      <div class="endpoints-list">
-        ${stats.length === 0 ? `
-          <div class="empty-state">
-            <div class="icon">🔭</div>
-            <h3>No webhooks yet</h3>
-            <p>Waiting for incoming events...</p>
-          </div>
-        ` : stats.map(s => `
-          <div class="endpoint-item">
-            <div class="endpoint-info">
-              <div class="endpoint-name">
-                ${s.name}
-                <span class="status-indicator ${s.events > 0 ? 'status-active' : 'status-idle'}"></span>
-              </div>
-              <div class="endpoint-meta">
-                <div class="meta-item">
-                  <span>📅</span>
-                  <span>${s.lastUpdate || 'No data yet'}</span>
-                </div>
-                <div class="meta-item">
-                  <span class="badge">${s.events} events</span>
-                </div>
-              </div>
-            </div>
-            <a class="view-logs-btn" href="/api/logs?endpoint=${s.name}" target="_blank">
-              📄 View Logs
-            </a>
-          </div>
-        `).join('')}
-      </div>
-    </div>
+    ` : `
+      <table>
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Last Update</th>
+            <th>Events</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${stats.map(s => `
+            <tr>
+              <td class="endpoint-name">${s.name}</td>
+              <td class="time">${s.lastUpdate ? toGMT7(s.lastUpdate) : 'No data'}</td>
+              <td class="events">${s.events}</td>
+              <td>
+                <a class="view-link" href="/api/logs?endpoint=${s.name}" target="_blank">View Logs →</a>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `}
 
     <div class="footer">
-      <p>Last updated: ${toGMT7(new Date().toISOString())} (GMT+7)</p>
-      <p>Auto-refresh: Click the refresh button to update data</p>
+      Last updated: ${toGMT7(new Date().toISOString())} (GMT+7) • Auto-refresh: 30s
     </div>
   </div>
 
   <script>
-    // Auto refresh every 30 seconds
     setTimeout(() => location.reload(), 30000);
   </script>
 </body>
@@ -512,48 +271,7 @@ export default async function handler(req, res) {
 
     return res.status(200).send(html);
   } catch (error) {
-    console.error('❌ Dashboard error:', error);
-    return res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Error</title>
-        <style>
-          body {
-            font-family: sans-serif;
-            padding: 40px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-          .error-box {
-            background: white;
-            padding: 40px;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 600px;
-          }
-          h1 { color: #e74c3c; margin-bottom: 20px; }
-          pre {
-            background: #f7f7f7;
-            padding: 20px;
-            border-radius: 8px;
-            overflow: auto;
-            font-size: 0.9em;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="error-box">
-          <h1>⚠️ Dashboard Error</h1>
-          <p>Unable to load dashboard:</p>
-          <pre>${error.message}\n\n${error.stack}</pre>
-        </div>
-      </body>
-      </html>
-    `);
+    console.error('Dashboard error:', error);
+    return res.status(500).send(`<h1>Error: ${error.message}</h1>`);
   }
 }
