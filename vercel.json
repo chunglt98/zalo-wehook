@@ -2,7 +2,7 @@
   "rewrites": [
     { "source": "/dashboard", "destination": "/api/dashboard" },
     { "source": "/logs", "destination": "/api/logs" },
-    { "source": "/webhook/:path*", "destination": "/api/webhook/:path*" },
+    { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/:path*", "destination": "/api/webhook/:path*" }
   ]
 }
