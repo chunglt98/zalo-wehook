@@ -1,78 +1,56 @@
 import { createClient } from '@vercel/kv';
 
-// ✅ Cấu hình runtime ổn định cho Vercel
 export const config = {
   runtime: 'nodejs',
   api: { bodyParser: true },
 };
 
+// ⚡ Webhook tối ưu hiệu suất cho Zalo
 export default async function handler(req, res) {
-  const endpoint = req.url.replace(/^\/(api\/)?/, '').split('?')[0];
+  const start = Date.now();
+  const endpoint = req.url.replace(/^\/(api\/)?webhook\//, '').split('?')[0] || 'root';
+  const method = req.method;
 
-  // 👉 1️⃣ Zalo gọi GET để xác thực domain
-  if (req.method === 'GET') {
-    const { verify_token } = req.query;
-    console.log('🔍 Zalo verifying:', verify_token);
-    if (verify_token) return res.status(200).send(verify_token);
-    return res.status(400).send('Missing verify_token');
-  }
+  // ✅ Trả 200 OK NGAY cho Zalo (không chờ xử lý)
+  res.status(200).json({ status: 'ok', endpoint, received_at: new Date().toISOString() });
 
-  // 👉 2️⃣ Zalo gửi event qua POST
-  if (req.method === 'POST') {
-    console.log('📥 Webhook received:', endpoint, req.body);
-
-    // Tạo client KV
-    const kv = createClient({
-      url: process.env.KV_REST_API_URL?.trim().replace(/\/$/, ''),
-      token: process.env.KV_REST_API_TOKEN,
-    });
-
-    const logData = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Unique ID
-      timestamp: new Date().toISOString(),
-      endpoint,
-      body: req.body,
-      headers: {
-        'user-agent': req.headers['user-agent'],
-        'content-type': req.headers['content-type'],
-      },
-    };
-
+  // ⚙️ Xử lý ngầm (ghi log, lưu dữ liệu)
+  process.nextTick(async () => {
     try {
+      const kv = createClient({
+        url: process.env.KV_REST_API_URL,
+        token: process.env.KV_REST_API_TOKEN,
+      });
+
+      const logData = {
+        timestamp: new Date().toISOString(),
+        method,
+        endpoint,
+        body: req.body,
+        headers: {
+          'user-agent': req.headers['user-agent'],
+          'content-type': req.headers['content-type'],
+        },
+        duration_ms: Date.now() - start,
+      };
+
       const key = `webhook:${endpoint}`;
-      
-      // 🔥 FIX RACE CONDITION: Dùng LPUSH (atomic) thay vì GET/SET
-      // LPUSH thêm vào đầu list, nhiều requests cùng lúc không bị mất data
-      await kv.lpush(key, JSON.stringify(logData));
-      
-      // Giới hạn tối đa 100 logs (LTRIM cũng là atomic)
-      await kv.ltrim(key, 0, 99);
+      const existing = (await kv.get(key)) || [];
+      existing.unshift(logData);
+      if (existing.length > 100) existing.length = 100;
+      await kv.set(key, existing);
 
-      // Cập nhật danh sách endpoints (SADD - atomic, không duplicate)
+      // Cập nhật danh sách endpoints
       const endpointsKey = 'webhook:endpoints';
-      await kv.sadd(endpointsKey, endpoint);
+      const endpoints = (await kv.get(endpointsKey)) || [];
+      if (!endpoints.includes(endpoint)) {
+        endpoints.push(endpoint);
+        await kv.set(endpointsKey, endpoints);
+      }
 
-      console.log('✅ Saved with atomic operations');
-
-      return res.status(200).json({
-        status: 'ok',
-        endpoint,
-        received_at: logData.timestamp,
-        event_id: logData.id,
-        note: 'Saved successfully',
-      });
-    } catch (error) {
-      console.error('❌ Error saving webhook:', error);
-      return res.status(200).json({
-        status: 'ok',
-        endpoint,
-        received_at: new Date().toISOString(),
-        note: 'Failed to save',
-        error: String(error.message || error),
-      });
+      console.log('✅ Logged webhook', endpoint);
+    } catch (err) {
+      console.error('❌ Background log failed:', err.message);
     }
-  }
-
-  // 👉 3️⃣ Các method khác (PUT, DELETE, v.v.)
-  return res.status(405).send('Method not allowed');
+  });
 }
