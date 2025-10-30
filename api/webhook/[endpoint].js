@@ -7,7 +7,7 @@ export const config = {
 };
 
 export default async function handler(req, res) {
-  const endpoint = req.url.replace(/^\/(api\/)?webhook\//, '').split('?')[0];
+  const endpoint = req.url.replace(/^\/(api\/)?/, '').split('?')[0];
 
   // 👉 1️⃣ Zalo gọi GET để xác thực domain
   if (req.method === 'GET') {
